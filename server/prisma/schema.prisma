@@ -1,0 +1,90 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model Site {
+  id                String   @id @default(uuid())
+  name              String
+  domain            String
+  widgetKey         String   @unique @default(uuid()) @map("widget_key")
+  aiEnabled         Boolean  @default(true) @map("ai_enabled")
+  systemPrompt      String?  @map("system_prompt") @db.Text
+  trackerBusinessId String?  @unique @map("tracker_business_id")
+  createdAt         DateTime @default(now()) @map("created_at")
+  updatedAt         DateTime @updatedAt @map("updated_at")
+
+  conversations Conversation[]
+  emailAccounts SiteEmail[]
+
+  @@map("sites")
+}
+
+model SiteEmail {
+  id          String   @id @default(uuid())
+  siteId      String   @map("site_id")
+  email       String
+  appPassword String   @map("app_password")
+  lastUid     Int      @default(0) @map("last_uid")
+  createdAt   DateTime @default(now()) @map("created_at")
+
+  site Site @relation(fields: [siteId], references: [id], onDelete: Cascade)
+
+  @@map("site_emails")
+}
+
+model Conversation {
+  id            String    @id @default(uuid())
+  siteId        String    @map("site_id")
+  visitorId     String    @map("visitor_id")
+  visitorName   String?   @map("visitor_name")
+  visitorPhone  String?   @map("visitor_phone")
+  status        String    @default("ai_handling")
+  source        String    @default("chat") // chat | email
+  category      String    @default("others") // wrong_tracking | refund | cancellation | others
+  emailThreadId String?   @map("email_thread_id")
+  unreadCount   Int       @default(0) @map("unread_count")
+  lastMessageAt DateTime? @map("last_message_at")
+  createdAt     DateTime  @default(now()) @map("created_at")
+  updatedAt     DateTime  @updatedAt @map("updated_at")
+
+  site     Site      @relation(fields: [siteId], references: [id], onDelete: Cascade)
+  messages Message[]
+
+  @@index([siteId])
+  @@index([visitorId])
+  @@map("conversations")
+}
+
+model Message {
+  id             String   @id @default(uuid())
+  conversationId String   @map("conversation_id")
+  sender         String   // visitor | ai | agent | tool_result
+  content        String   @db.Text
+  metadata       Json?
+  emailMessageId String?  @map("email_message_id")
+  createdAt      DateTime @default(now()) @map("created_at")
+
+  conversation Conversation @relation(fields: [conversationId], references: [id], onDelete: Cascade)
+
+  @@index([conversationId])
+  @@index([createdAt])
+  @@map("messages")
+}
+
+model WebhookEndpoint {
+  id        String   @id @default(uuid())
+  siteId    String?  @map("site_id")
+  name      String
+  url       String
+  secret    String
+  events    String[]
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now()) @map("created_at")
+
+  @@map("webhook_endpoints")
+}
