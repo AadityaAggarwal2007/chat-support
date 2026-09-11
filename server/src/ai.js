@@ -397,7 +397,31 @@ async function getAIResponse(conversationId, siteSystemPrompt, trackerBusinessId
 
     if (name === 'lookup_order') {
       console.log(`[AI] Order lookup for conv ${conversationId}:`, args);
-      return { payload: await lookupOrder(args, trackerBusinessId || null), persist: true };
+      const result = await lookupOrder(args, trackerBusinessId || null);
+
+      // A successful lookup is the first point at which we actually know who we
+      // are talking to, so stop calling them "Visitor" in the inbox. Only the
+      // real order holder's name is used — never anything the visitor typed.
+      const confirmed = result.found ? (result.orders || [])[0] : null;
+      if (confirmed?.customer_name) {
+        const realName = String(confirmed.customer_name).replace(/\s*\.\s*$/, '').trim();
+        if (realName) {
+          try {
+            await prisma.conversation.update({
+              where: { id: conversationId },
+              data: {
+                visitorName: realName,
+                ...(args.phone ? { visitorPhone: args.phone } : {}),
+              },
+            });
+            console.log(`[AI] Identified conv ${conversationId} as: ${realName}`);
+          } catch (e) {
+            console.error('[AI] could not set visitor name:', e.message);
+          }
+        }
+      }
+
+      return { payload: result, persist: true };
     }
 
     return { payload: { error: `Unknown tool: ${name}` }, persist: false };

@@ -36,6 +36,16 @@ function last4Digits(phone) {
   return digits.length >= 4 ? digits.slice(-4) : null;
 }
 
+// ILIKE treats % and _ as wildcards, so an order id of "%" matched every order.
+function escapeLike(v) {
+  return v.replace(/[\\%_]/g, (c) => '\\' + c);
+}
+
+// Names are matched with a regex, so anything the customer types must be inert.
+function escapeRegex(v) {
+  return v.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+}
+
 function normalizeOrderId(orderId) {
   if (!orderId) return null;
   const trimmed = orderId.trim();
@@ -64,7 +74,21 @@ async function lookupOrder({ order_id, email, phone, phone_last4, name }, tracke
   const rawLast4 = phone_last4 ? phone_last4.replace(/\D/g, '').slice(-4) : null;
   const last4 = rawLast4 && rawLast4.length === 4 && normalizedName ? rawLast4 : null;
 
-  const hasPersonalIdentifier = Boolean(normalizedEmail || normalizedPhone || last4 || normalizedName);
+  // Email and phone identify one person. A name does not: it is matched as a
+  // substring, so "Raj" pulled back Suraj PATIL and Rajan, and "a" pulled back
+  // 7,312 of 7,946 orders. Because the clauses used to be OR'd, a customer who
+  // mistyped their phone still matched on name alone and was shown a stranger's
+  // order. A strong identifier, once given, now has to match.
+  const hasStrongIdentifier = Boolean(normalizedEmail || normalizedPhone);
+  const hasPersonalIdentifier = Boolean(hasStrongIdentifier || last4 || normalizedName);
+
+  if (normalizedName && !hasStrongIdentifier && !last4 && !normalizedOrderId) {
+    return {
+      found: false,
+      needs_verification: true,
+      message: 'A name on its own matches many different customers. Ask for the email or phone number on the order, then look up again.',
+    };
+  }
 
   if (rawLast4 && !normalizedName && !normalizedEmail && !normalizedPhone) {
     return {
@@ -115,12 +139,17 @@ async function lookupOrder({ order_id, email, phone, phone_last4, name }, tracke
        LEFT JOIN order_items oi ON oi.order_id = o.order_id
        LEFT JOIN businesses b ON b.id = o.business_id
        WHERE ($1::text IS NULL OR o.order_id ILIKE $1)
+       -- If an email or phone was supplied it must match. Previously these were
+       -- OR'd with the name, so a wrong number was silently ignored.
        AND (
-         ($2::text IS NOT NULL AND LOWER(o.customer_email) = $2) OR
-         ($3::text IS NOT NULL AND o.customer_mobile = $3) OR
-         ($5::text IS NOT NULL AND RIGHT(o.customer_mobile, 4) = $5) OR
-         ($6::text IS NOT NULL AND o.customer_name ILIKE '%' || $6 || '%')
+         ($2::text IS NULL AND $3::text IS NULL)
+         OR ($2::text IS NOT NULL AND LOWER(o.customer_email) = $2)
+         OR ($3::text IS NOT NULL AND o.customer_mobile = $3)
        )
+       AND ($5::text IS NULL OR RIGHT(o.customer_mobile, 4) = $5)
+       -- Name only ever narrows, and matches at a word start so "Raj" no longer
+       -- matches "Suraj".
+       AND ($6::text IS NULL OR o.customer_name ~* ('(^|[[:space:]])' || $6))
        AND ($4::uuid IS NULL OR o.business_id = $4::uuid)
        GROUP BY
          o.order_id, o.customer_name, o.customer_email, o.customer_mobile,
@@ -129,7 +158,14 @@ async function lookupOrder({ order_id, email, phone, phone_last4, name }, tracke
          o.payment_method, b.name, b.tracking_domain
        ORDER BY o.created_at DESC
        LIMIT 3`,
-      [normalizedOrderId, normalizedEmail, normalizedPhone, trackerBusinessId || null, last4, normalizedName]
+      [
+        normalizedOrderId ? escapeLike(normalizedOrderId) : null,
+        normalizedEmail,
+        normalizedPhone,
+        trackerBusinessId || null,
+        last4,
+        normalizedName ? escapeRegex(normalizedName) : null,
+      ]
     );
 
     if (result.rows.length === 0) {
