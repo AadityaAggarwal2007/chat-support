@@ -37,7 +37,10 @@
   function escapeHtml(s) { return s.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
 
   var css = [
-    '#_cw_root * { box-sizing: border-box; margin: 0; padding: 0; }',
+    // Wrapped in :where() so the reset carries zero specificity. As `#_cw_root *`
+    // it scored (1,0,0) and beat every `._cw_class` rule below, silently zeroing
+    // their padding — which is why bubbles rendered with text flush to the edge.
+    ':where(#_cw_root *) { box-sizing: border-box; margin: 0; padding: 0; }',
     '#_cw_root { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }',
 
     '#_cw_btn {',
@@ -75,9 +78,10 @@
     '#_cw_panel._cw_open { transform: translateY(0); opacity: 1; pointer-events: all; }',
 
     '#_cw_head {',
-    '  background: ' + ACCENT + '; color: white; padding: 16px 18px 14px;',
-    '  display: flex; align-items: center; gap: 10px; flex-shrink: 0;',
+    '  background: ' + ACCENT + '; color: white; padding: 18px 20px 16px;',
+    '  display: flex; align-items: center; gap: 11px; flex-shrink: 0;',
     '}',
+    '#_cw_panel._cw_expanded { width: 560px; height: 90vh; }',
     '#_cw_head_dot { width: 8px; height: 8px; border-radius: 50%; background: #34d399; flex-shrink: 0; }',
     '#_cw_head_info { flex: 1; }',
     '#_cw_head_title { font-size: 15px; font-weight: 600; letter-spacing: -0.01em; }',
@@ -130,57 +134,69 @@
 
     '#_cw_chat { display: none; flex-direction: column; flex: 1; min-height: 0; }',
     '#_cw_messages {',
-    '  flex: 1; overflow-y: auto; padding: 16px; display: flex;',
-    '  flex-direction: column; gap: 6px; scroll-behavior: smooth;',
+    '  flex: 1; overflow-y: auto; padding: 20px 18px 16px; display: flex;',
+    '  flex-direction: column; gap: 14px; scroll-behavior: smooth;',
     '}',
-    '#_cw_messages::-webkit-scrollbar { width: 3px; }',
-    '#_cw_messages::-webkit-scrollbar-thumb { background: #e0e0e0; border-radius: 3px; }',
-    '._cw_msg { max-width: 80%; display: flex; flex-direction: column; }',
-    '._cw_msg._cw_visitor { align-self: flex-end; }',
-    '._cw_msg._cw_ai, ._cw_msg._cw_agent { align-self: flex-start; }',
+    '#_cw_messages::-webkit-scrollbar { width: 6px; }',
+    '#_cw_messages::-webkit-scrollbar-track { background: transparent; }',
+    '#_cw_messages::-webkit-scrollbar-thumb { background: #e3e3e3; border-radius: 3px; }',
+    '#_cw_messages::-webkit-scrollbar-thumb:hover { background: #d0d0d0; }',
+    '._cw_msg { max-width: 76%; display: flex; flex-direction: column; }',
+    '._cw_msg._cw_visitor { align-self: flex-end; align-items: flex-end; }',
+    '._cw_msg._cw_ai, ._cw_msg._cw_agent { align-self: flex-start; align-items: flex-start; }',
+    // Consecutive messages from the same sender sit closer, so a burst reads as
+    // one turn rather than several disconnected ones.
+    '._cw_msg + ._cw_msg._cw_same { margin-top: -8px; }',
     '._cw_bubble {',
-    '  padding: 10px 14px; border-radius: 18px; font-size: 14px; line-height: 1.55;',
-    '  word-break: break-word; white-space: pre-wrap;',
+    '  padding: 13px 17px; border-radius: 20px; font-size: 14.5px; line-height: 1.6;',
+    '  word-break: break-word; overflow-wrap: anywhere; white-space: pre-wrap;',
+    '  letter-spacing: 0.005em;',
     '}',
-    '._cw_visitor ._cw_bubble { background: ' + ACCENT + '; color: white; border-bottom-right-radius: 6px; }',
-    '._cw_ai ._cw_bubble, ._cw_agent ._cw_bubble { background: #f5f5f5; color: #1a1a1a; border-bottom-left-radius: 6px; }',
-    '._cw_agent ._cw_bubble { border-left: 2.5px solid ' + ACCENT + '; }',
-    '._cw_label { font-size: 11px; color: #999; margin-bottom: 3px; padding: 0 4px; font-weight: 500; }',
-    '._cw_visitor ._cw_label { text-align: right; }',
-    '._cw_time { font-size: 10px; color: #c0c0c0; margin-top: 2px; padding: 0 4px; }',
-    '._cw_visitor ._cw_time { text-align: right; }',
+    '._cw_visitor ._cw_bubble {',
+    '  background: ' + ACCENT + '; color: #fff; border-bottom-right-radius: 7px;',
+    '  box-shadow: 0 1px 2px rgba(0,0,0,0.12);',
+    '}',
+    '._cw_ai ._cw_bubble, ._cw_agent ._cw_bubble {',
+    '  background: #f4f4f5; color: #18181b; border-bottom-left-radius: 7px;',
+    '  box-shadow: 0 1px 2px rgba(0,0,0,0.04);',
+    '}',
+    '._cw_agent ._cw_bubble { border-left: 3px solid ' + ACCENT + '; }',
+    '._cw_bubble a { color: inherit; text-decoration: underline; text-underline-offset: 2px; }',
+    '._cw_label { font-size: 11px; color: #8a8a8f; margin-bottom: 5px; padding: 0 6px; font-weight: 500; letter-spacing: 0.01em; }',
+    '._cw_time { font-size: 10.5px; color: #b4b4b8; margin-top: 5px; padding: 0 6px; }',
     '#_cw_typing {',
-    '  align-self: flex-start; padding: 10px 14px; background: #f5f5f5;',
-    '  border-radius: 18px; border-bottom-left-radius: 6px;',
-    '  display: none; align-items: center; gap: 4px;',
+    '  align-self: flex-start; padding: 14px 18px; background: #f4f4f5;',
+    '  border-radius: 20px; border-bottom-left-radius: 7px;',
+    '  display: none; align-items: center; gap: 5px;',
     '}',
     '._cw_dot { width: 5px; height: 5px; background: #bbb; border-radius: 50%; animation: _cw_bounce 1.2s infinite; }',
     '._cw_dot:nth-child(2) { animation-delay: 0.2s; }',
     '._cw_dot:nth-child(3) { animation-delay: 0.4s; }',
     '@keyframes _cw_bounce { 0%,60%,100% { transform: translateY(0); } 30% { transform: translateY(-3px); } }',
     '#_cw_footer {',
-    '  padding: 12px 14px; border-top: 1px solid #f3f3f3;',
-    '  display: flex; gap: 8px; align-items: flex-end;',
+    '  padding: 14px 16px 12px; border-top: 1px solid #f0f0f1;',
+    '  display: flex; gap: 10px; align-items: flex-end; background: #fff;',
     '}',
     '#_cw_input {',
-    '  flex: 1; border: 1.5px solid #e5e5e5; border-radius: 22px;',
-    '  padding: 10px 16px; font-size: 14px; resize: none;',
-    '  outline: none; max-height: 100px; min-height: 40px;',
-    '  transition: border-color 0.2s; line-height: 1.4; overflow-y: auto;',
-    '  font-family: inherit; color: #1a1a1a;',
+    '  flex: 1; border: 1.5px solid #e4e4e7; border-radius: 24px;',
+    '  padding: 12px 18px; font-size: 14.5px; resize: none;',
+    '  outline: none; max-height: 120px; min-height: 44px;',
+    '  transition: border-color 0.18s, box-shadow 0.18s; line-height: 1.5; overflow-y: auto;',
+    '  font-family: inherit; color: #18181b;',
     '}',
-    '#_cw_input:focus { border-color: #bbb; }',
-    '#_cw_input::placeholder { color: #aaa; }',
+    '#_cw_input:focus { border-color: ' + ACCENT + '; box-shadow: 0 0 0 3px rgba(0,0,0,0.05); }',
+    '#_cw_input::placeholder { color: #a1a1aa; }',
     '#_cw_send {',
-    '  width: 38px; height: 38px; border-radius: 50%; flex-shrink: 0;',
+    '  width: 44px; height: 44px; border-radius: 50%; flex-shrink: 0;',
     '  background: ' + ACCENT + '; border: none; cursor: pointer;',
     '  display: flex; align-items: center; justify-content: center;',
-    '  transition: opacity 0.15s; opacity: 0.4;',
+    '  transition: opacity 0.15s, transform 0.15s; opacity: 0.35;',
     '}',
     '#_cw_send:not(:disabled) { opacity: 1; }',
-    '#_cw_send:hover:not(:disabled) { filter: brightness(1.1); }',
-    '#_cw_send svg { width: 14px; height: 14px; fill: white; }',
-    '#_cw_powered { text-align: center; font-size: 10px; color: #ccc; padding: 6px 0 10px; }',
+    '#_cw_send:hover:not(:disabled) { filter: brightness(1.12); transform: scale(1.05); }',
+    '#_cw_send:active:not(:disabled) { transform: scale(0.96); }',
+    '#_cw_send svg { width: 16px; height: 16px; fill: white; }',
+    '#_cw_powered { text-align: center; font-size: 10px; color: #d4d4d8; padding: 4px 0 12px; letter-spacing: 0.02em; }',
 
     '@media (max-width: 768px) {',
     '  #_cw_btn { bottom: 70px; right: 16px; }',
@@ -377,7 +393,16 @@
     var div = document.createElement('div');
     div.className = '_cw_msg ' + cls;
     div.dataset.id = msg.id;
-    div.innerHTML = '<div class="_cw_label">' + label + '</div><div class="_cw_bubble">' + escapeHtml(msg.content) + '</div><div class="_cw_time">' + formatTime(msg.createdAt) + '</div>';
+
+    // Group a run from one sender: tuck it closer and drop the repeated name.
+    var prev = typingEl.previousElementSibling;
+    var sameSender = prev && prev.classList && prev.classList.contains('_cw_msg') && prev.classList.contains(cls);
+    if (sameSender) div.classList.add('_cw_same');
+
+    div.innerHTML =
+      (sameSender ? '' : '<div class="_cw_label">' + label + '</div>') +
+      '<div class="_cw_bubble">' + escapeHtml(msg.content) + '</div>' +
+      '<div class="_cw_time">' + formatTime(msg.createdAt) + '</div>';
     messagesEl.insertBefore(div, typingEl);
     messagesEl.scrollTop = messagesEl.scrollHeight;
     if (msg.createdAt) {
@@ -509,10 +534,10 @@
         state.lastTs = data.message.createdAt;
         try { localStorage.setItem('_cw_ts_' + SITE_KEY, state.lastTs); } catch(e) {}
       }
-      if (data.aiResponse) {
-        showTyping(false);
-        renderMessage(data.aiResponse);
-      }
+      // Always stop the indicator. Leaving it spinning on a missing reply looks
+      // like the chat died, which reads worse than any error would.
+      showTyping(false);
+      if (data.aiResponse) renderMessage(data.aiResponse);
       state.sending = false;
       if (callback) callback();
     })
@@ -548,8 +573,9 @@
   btn.addEventListener('click', function() { togglePanel(!state.open); });
   closeBtn.addEventListener('click', function() { togglePanel(false); });
   expandBtn.addEventListener('click', function() {
-    var cur = panel.style.height;
-    panel.style.height = (cur === '90vh') ? '480px' : '90vh';
+    // Width lives in the class too, so expanding actually gives the text more
+    // room instead of just making a narrow column taller.
+    panel.classList.toggle('_cw_expanded');
   });
 
   welcomeInput.addEventListener('input', updateWelcomeSend);

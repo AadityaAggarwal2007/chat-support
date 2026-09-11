@@ -116,7 +116,21 @@ router.post('/message', async (req, res) => {
           io.of('/agent').to(`conv:${conversationId}`).emit('conversation_updated', updated);
         }
       } catch (aiErr) {
+        // Never leave the visitor with a spinning typing indicator and no reply.
         console.error('[widget] AI error:', aiErr.message);
+        try {
+          aiMessage = await prisma.message.create({
+            data: {
+              conversationId,
+              sender: 'ai',
+              content: 'Sorry, that took longer than expected on my end. Could you send that again?',
+            },
+          });
+          io.of('/agent').to(`conv:${conversationId}`).emit('new_message', aiMessage);
+          io.of('/visitor').to(`conv:${conversationId}`).emit('new_message', aiMessage);
+        } catch (saveErr) {
+          console.error('[widget] fallback save failed:', saveErr.message);
+        }
       }
     }
 

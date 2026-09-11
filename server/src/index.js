@@ -12,6 +12,7 @@ const messagesRouter = require('./routes/messages');
 const widgetRouter = require('./routes/widget');
 const syncRouter = require('./routes/sync');
 const siteEmailsRouter = require('./routes/site-emails');
+const settingsRouter = require('./routes/settings');
 const { setupSocket } = require('./socket');
 const { getConnectedBusinesses } = require('./tracker-db');
 const { startEmailPoller } = require('./email-service');
@@ -50,6 +51,7 @@ app.use('/api/conversations', conversationsRouter);
 app.use('/api/messages', messagesRouter);
 app.use('/api/widget', widgetRouter);
 app.use('/api/sync', syncRouter);
+app.use('/api/settings', settingsRouter);
 
 // Widget JS — served with permissive CORS for embedding anywhere
 app.get('/widget.js', (req, res) => {

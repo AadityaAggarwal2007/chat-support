@@ -1,0 +1,39 @@
+# Host networking is deliberate: PostgreSQL on this box listens on 127.0.0.1
+# only and is shared with the Tracker app, so a bridged container could not
+# reach it without republishing the database. Host mode also keeps DATABASE_URL
+# identical to the pre-Docker setup.
+services:
+  chat-server:
+    build:
+      context: ./server
+    image: chat-support-server:latest
+    container_name: chat-server
+    restart: unless-stopped
+    network_mode: host
+    # Mounted rather than passed via env_file: Docker does not strip quotes, so
+    # DATABASE_URL="postgres://..." reached Prisma with the quotes still attached
+    # and failed validation. The app already calls dotenv.config(), which parses
+    # them correctly, and this keeps a single source of truth for secrets.
+    volumes:
+      - ./server/.env:/app/.env:ro
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:5000/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  chat-dashboard:
+    build:
+      context: ./dashboard
+      args:
+        NEXT_PUBLIC_SERVER_URL: ${NEXT_PUBLIC_SERVER_URL}
+    image: chat-support-dashboard:latest
+    container_name: chat-dashboard
+    restart: unless-stopped
+    network_mode: host
+    environment:
+      PORT: 5001
+      HOSTNAME: 0.0.0.0
+    depends_on:
+      - chat-server

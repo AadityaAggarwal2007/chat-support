@@ -53,11 +53,38 @@ async function lookupOrder({ order_id, email, phone, phone_last4, name }, tracke
   const normalizedOrderId = normalizeOrderId(order_id);
   const normalizedPhone = normalizePhone(phone);
   const normalizedEmail = email ? email.toLowerCase().trim() : null;
-  const last4 = phone_last4 ? phone_last4.replace(/\D/g, '').slice(-4) : last4Digits(phone);
   const normalizedName = name ? name.trim() : null;
 
-  if (!normalizedOrderId && !normalizedEmail && !normalizedPhone && !last4 && !normalizedName) {
+  // Last-4 is only ever taken from an explicit phone_last4. Deriving it from a
+  // full phone number used to OR it into the query, so a customer who gave their
+  // real number also matched every stranger whose number ended the same way —
+  // 4,783 of 7,946 orders sit in colliding last-4 groups, and one customer was
+  // shown another's order because of it. On its own it identifies nobody, so it
+  // is honoured only alongside a name.
+  const rawLast4 = phone_last4 ? phone_last4.replace(/\D/g, '').slice(-4) : null;
+  const last4 = rawLast4 && rawLast4.length === 4 && normalizedName ? rawLast4 : null;
+
+  const hasPersonalIdentifier = Boolean(normalizedEmail || normalizedPhone || last4 || normalizedName);
+
+  if (rawLast4 && !normalizedName && !normalizedEmail && !normalizedPhone) {
+    return {
+      found: false,
+      needs_verification: true,
+      message: 'Last 4 digits alone match many different customers. Ask for the name on the order and look up again with both.',
+    };
+  }
+
+  if (!normalizedOrderId && !hasPersonalIdentifier) {
     return { found: false, message: 'Please provide a name, last 4 digits of phone, email, or order ID.' };
+  }
+
+  // Order IDs are sequential and guessable, so one on its own is not proof of ownership.
+  if (!hasPersonalIdentifier) {
+    return {
+      found: false,
+      needs_verification: true,
+      message: 'An order number alone is not enough to confirm identity. Ask the customer for the name, email, or last 4 digits of the phone number on the order, then look up again with both.',
+    };
   }
 
   try {
@@ -87,8 +114,8 @@ async function lookupOrder({ order_id, email, phone, phone_last4, name }, tracke
        FROM orders o
        LEFT JOIN order_items oi ON oi.order_id = o.order_id
        LEFT JOIN businesses b ON b.id = o.business_id
-       WHERE (
-         ($1::text IS NOT NULL AND o.order_id ILIKE $1) OR
+       WHERE ($1::text IS NULL OR o.order_id ILIKE $1)
+       AND (
          ($2::text IS NOT NULL AND LOWER(o.customer_email) = $2) OR
          ($3::text IS NOT NULL AND o.customer_mobile = $3) OR
          ($5::text IS NOT NULL AND RIGHT(o.customer_mobile, 4) = $5) OR
@@ -112,10 +139,10 @@ async function lookupOrder({ order_id, email, phone, phone_last4, name }, tracke
       };
     }
 
-    const TRACKER_BASE = process.env.SERVER_PUBLIC_URL?.replace(':5000', '') || 'http://200.141.13.66';
+    const TRACKER_BASE = process.env.TRACKING_BASE_URL || 'https://shiptrack.store';
 
     const orders = result.rows.map((row) => {
-      const trackingBase = row.business_tracking_domain || TRACKER_BASE;
+      const trackingBase = (row.business_tracking_domain || TRACKER_BASE).replace(/\/+$/, '');
       const trackingLink = row.tracking_token
         ? `${trackingBase}/track/${row.tracking_token}`
         : null;

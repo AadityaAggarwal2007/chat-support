@@ -70,4 +70,14 @@ export const api = {
     }),
   deleteSiteEmail: (siteId: string, emailId: string) =>
     request<{ ok: boolean }>(`/sites/${siteId}/emails/${emailId}`, { method: 'DELETE' }),
+
+  // AI Settings
+  getAISettings: () =>
+    request<{
+      activeModel: string;
+      models: Record<string, { name: string; free?: boolean }>;
+      chain: string[];
+    }>('/settings/ai'),
+  setAIModel: (model: string) =>
+    request<{ activeModel: string; name: string }>('/settings/ai', { method: 'PATCH', body: JSON.stringify({ model }) }),
 };
