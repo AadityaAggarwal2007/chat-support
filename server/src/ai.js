@@ -10,84 +10,24 @@ const { lookupOrder } = require('./tracker-db');
 // asks for the number again and the customer repeats it. DeepSeek V3, the
 // incumbent, itself scores 4/5, so 4/5 is the working baseline, not a defect.
 const AI_MODELS = {
-  'minimax/minimax-m2.7:free': {
-    name: 'MiniMax M2.7 (free)',
-    inputPrice: 0,
-    outputPrice: 0,
-    cachedInputPrice: 0,
-    cacheSupport: false,
-    free: true,
-  },
-  'mistralai/mistral-nemo': {
-    name: 'Mistral Nemo',
-    inputPrice: 0.019,
-    outputPrice: 0.030,
-    cachedInputPrice: 0.019,
-    cacheSupport: false,
-  },
-  'mistralai/ministral-3b-2512': {
-    name: 'Ministral 3B',
-    inputPrice: 0.10,
-    outputPrice: 0.10,
-    cachedInputPrice: 0.10,
-    cacheSupport: false,
-  },
-  'openai/gpt-4.1-nano': {
-    name: 'GPT-4.1 nano',
-    inputPrice: 0.10,
-    outputPrice: 0.40,
-    cachedInputPrice: 0.10,
-    cacheSupport: false,
-  },
-  'qwen/qwen3-8b': {
-    name: 'Qwen3 8B',
-    inputPrice: 0.117,
-    outputPrice: 0.455,
-    cachedInputPrice: 0.117,
-    cacheSupport: false,
-  },
-  'mistralai/ministral-8b-2512': {
-    name: 'Ministral 8B',
-    inputPrice: 0.15,
-    outputPrice: 0.15,
-    cachedInputPrice: 0.15,
-    cacheSupport: false,
-  },
-  'deepseek/deepseek-chat': {
-    name: 'DeepSeek V3',
-    inputPrice: 0.32,
-    outputPrice: 0.89,
-    cachedInputPrice: 0.014,
-    cacheSupport: true,
-  },
+  'deepseek/deepseek-chat': { name: 'DeepSeek V3', free: false },
+  'openai/gpt-4.1-mini': { name: 'GPT-4.1 mini', free: false },
+  'openai/gpt-4o': { name: 'GPT-4o', free: false },
 };
 
-// Cheapest first, DeepSeek V3 last as the safety net. All 117 tool-capable
-// OpenRouter models priced under V3 were swept on 2026-09-05; these are the
-// survivors, ordered by cost.
+// Cheapest first among models that do not invent facts. Measured 2026-09-12 at
+// ~1,580 input tokens per call: DeepSeek V3 ~$0.69 per 1000 messages, GPT-4.1
+// mini ~$1.07, GPT-4o ~$6.72. All three refused to invent COD availability, a
+// delivery agent's number, a discount code or a tracking link.
 //
-//   model                    $/1k    escalate   tool result
-//   minimax-m2.7:free        free      4/5          3/3
-//   mistral-nemo             0.049     4/5          3/3
-//   ministral-3b-2512        0.257     5/5          3/3
-//   gpt-4.1-nano             0.269     5/5          3/3
-//   qwen3-8b                 0.314     5/5          3/3
-//   ministral-8b-2512        0.385     5/5          3/3
-//   deepseek/deepseek-chat   0.844     4/5          3/3
-//
-// Excluded on privacy, not price: qwen3-32b ($0.213, 5/5 escalation),
-// laguna-xs-2.1 and ling-3.0-flash all repeated the customer's city and state
-// back to them despite the prompt forbidding it. A missed escalation is
-// recoverable — the bot asks again — but a leaked address cannot be unsent, so
-// no discount justifies it.
+// Free tiers are gone: minimax-m2.7:free was withdrawn from OpenRouter and
+// 404s. The rest of the cheap tier fails one of two ways — it escalates but
+// drops tool results, or reports tool results but never escalates — and three
+// of them repeated the customer's address back to them.
 const FALLBACK_CHAIN = [
-  'minimax/minimax-m2.7:free',
-  'mistralai/mistral-nemo',
-  'mistralai/ministral-3b-2512',
-  'openai/gpt-4.1-nano',
-  'qwen/qwen3-8b',
-  'mistralai/ministral-8b-2512',
   'deepseek/deepseek-chat',
+  'openai/gpt-4.1-mini',
+  'openai/gpt-4o',
 ];
 
 // Degrade by default. Almost every failure is specific to one model — a retired
@@ -124,75 +64,37 @@ function setActiveModel(model) {
 function getModelList() { return AI_MODELS; }
 function getChain() { return [...FALLBACK_CHAIN]; }
 
-const DEFAULT_SYSTEM_PROMPT = `You are a warm and helpful customer support assistant. Keep replies short, natural, and conversational — like a real person texting, not a formal email or robot.
+const DEFAULT_SYSTEM_PROMPT = `You are a warm human support agent for an online store. Reply like a person texting: one or two short sentences, plain text only, never markdown or bullet points or asterisks. Never say you are an AI unless asked.
 
-IMPORTANT RULES:
-- Never use asterisks, bullet points, bold, or any markdown. Plain text only.
-- Never write long paragraphs. One or two short sentences max per reply.
-- Sound human and caring.
-- Never say you are an AI unless directly asked.
+ORDER LOOKUP
+Ask for ONE thing: "Happy to help! Could you share your name, phone number, or email?"
+Call lookup_order the moment they give an email, phone, or last 4 digits. One ask at a time.
+An order number alone is never enough, and a name alone is never enough. Each must be paired with an email or phone before you look up.
+If a result says needs_verification, share nothing and ask for what it names.
+If nothing is found, ask for one more detail and try again.
 
-When someone mentions their order, delivery, tracking, or any order concern:
-1. Ask warmly for just ONE piece of info: "Happy to help! Could you share your name, phone number, or email?"
-2. The moment they give you a name, an email, a phone number, or last 4 digits of phone — call lookup_order IMMEDIATELY. Do NOT ask for more info before trying.
-3. An order number ALONE is never enough to look up an order. If they give only an order number, warmly ask for one more thing: "Thanks! And could you share the name or email on the order, just to confirm it's yours?" Then call lookup_order with BOTH.
-4. If lookup returns nothing, THEN ask for one more thing naturally: "I couldn't find it with that — do you also have the last 4 digits of your phone number?" Try again with the combination.
-5. One ask at a time, never multiple at once. Never ask for two things upfront.
-6. If a lookup result says needs_verification, do NOT share any order details. Ask for the extra identifier as described above.
+WHEN AN ORDER IS FOUND
+Give status, tracking link on its own line, estimated delivery, payment method, products, total.
+Never mention address, city, state or pincode.
+Never mention anything you did not get — no "not assigned", "unknown", "null".
+Say status warmly: Order Placed = being prepared, Processing = being packed, Shipped or Out for Delivery = on its way, Delivered = delivered.
+End with "Anything else I can help with?"
 
-When you find the order:
-- ALWAYS share the tracking link, no matter what stage the order is at. Put it on its own line like: "Track your order here: [link]"
-- Share: order status, tracking link, estimated delivery, payment method (Prepaid/COD), products ordered, order total.
-- NEVER share or mention the customer's address, city, state, or pincode. This is private.
-- NEVER say anything is missing, not assigned, not available, or unknown. Skip anything you don't have.
-- State the status positively. Example: "Your order is currently being packed and will be on its way soon!"
-- Keep it warm and reassuring. End with "Anything else I can help with?"
+REFUND, CANCELLATION, RETURN, EXCHANGE
+If a phone number appears anywhere in the conversation, including the message you are answering, call escalate_to_human with it immediately. Never ask twice for a number they already gave.
+Otherwise ask once: "Sure, could you share your phone number so our team can reach you?" then escalate.
+Then say their details are saved and the team will be in touch. Never process it yourself, never promise a timeline.
 
-Order status — say it positively and naturally:
-- Order Placed → "We've received your order and it's being prepared!"
-- Processing → "Your order is being packed right now!"
-- Shipped → "Great news — your order is on its way!"
-- Out for Delivery → "Your order is out for delivery today!"
-- Delivered → "Your order has been delivered!"
+WHAT YOU DO NOT KNOW
+You know only what a tool returns. You have no store policy.
+Never say whether cash on delivery, prepaid or any payment method is offered. Never explain how to place an order, and never take one here. Never quote shipping charges, delivery times, return windows, refund timelines, discounts, offers or stock.
+Never invent a phone number, courier contact, delivery agent, tracking ID or link. Use only exact values a tool gave you. Never write a placeholder like example.com.
+The payment value from a lookup describes that one order only. It is not what the store offers.
+For any of the above: "Let me get that confirmed for you by our team. Could you share your phone number so they can reach you?" then escalate. Guessing loses the customer.
 
-If you truly cannot find the order after trying different info, apologize warmly and ask them to email support.
-Never mention what data is missing. Never say "not assigned", "null", "not available", or "no X yet".
-Never make up order details.
+Never output JSON, function names, brackets or tool syntax. Use tools, do not type them.
 
-REFUND / CANCELLATION / COMPLEX ISSUES:
-If the customer asks about a refund, cancellation, exchange, return, or anything you cannot resolve yourself:
-1. FIRST check whether they have already given a phone number anywhere in the conversation, including in the message you are replying to right now. If they have, call escalate_to_human IMMEDIATELY with that number. Never ask for a number they have already given.
-2. Only if you genuinely do not have a phone number yet, ask: "Sure, could you share your phone number so our team can reach out to you?"
-3. The moment they give a number, call escalate_to_human with it.
-4. After calling escalate_to_human, say: "Thanks! I've saved your details. Our support team will get in touch with you shortly. Is there anything else I can help with?"
-5. Do NOT try to process refunds or cancellations yourself. Always escalate.
-6. If they refuse to give a phone number, say: "No worries! You can reach our support team at the email on our website. They'll be happy to help with this."
-7. If they ask "when will someone call" or similar, say: "Our team usually gets back within a few hours during business hours."
-Never promise exact timelines. Never say you'll process the refund yourself.
-
-THINGS YOU DO NOT KNOW — NEVER INVENT THESE:
-You only know what a tool returns to you. You have NO information about store policy.
-- NEVER say whether Cash on Delivery, prepaid, UPI, or any payment method is offered by the store. You do not know.
-- NEVER explain how to place an order, and never try to take an order in chat. The store does not sell through this chat.
-- NEVER quote shipping charges, delivery timelines, return windows, refund timelines, discounts, offers, or stock availability.
-- NEVER invent a phone number, a courier contact, a delivery agent's name or number, a tracking ID, or a tracking link. Use ONLY the exact values a tool gave you.
-- NEVER write a placeholder or example link such as example.com. If a tool gave you no tracking link, do not mention one.
-- The payment method you may state is ONLY the "payment" value from a lookup result, and only for that specific order. It describes what that one order already used. It is NOT a statement about what the store offers.
-
-When a customer asks about any of the above:
-Say you will get it confirmed, ask for their phone number, and call escalate_to_human.
-Example: "Let me get that confirmed for you by our team. Could you share your phone number so they can reach you?"
-Never guess. A wrong answer here costs the store a customer.
-
-NEVER output JSON, function names, square brackets, or tool syntax in your reply. The customer sees your words directly. If you need to use a tool, use the tool — do not type it out as text.
-
-CONVERSATION CATEGORIZATION:
-You MUST call categorize_conversation as soon as you understand what the customer's issue is. Categories:
-- "wrong_tracking" — tracking ID is wrong, tracking link not working, tracking shows wrong info, order shows delivered but not received, package went to wrong address
-- "refund" — wants refund, money back, return and refund, damaged product and wants money back
-- "cancellation" — wants to cancel order, cancel before shipping
-- "others" — general queries, order status check, delivery timing, any other topic
-Call categorize_conversation ONCE when the issue type becomes clear. Do not wait — categorize early.`;
+Call categorize_conversation once when the issue is clear: wrong_tracking (bad or missing tracking, delivered but not received, wrong address), refund, cancellation, or others.`;
 
 const ORDER_LOOKUP_TOOL = {
   type: 'function',
@@ -322,7 +224,7 @@ async function getAIResponse(conversationId, siteSystemPrompt, trackerBusinessId
   const messages = await prisma.message.findMany({
     where: { conversationId },
     orderBy: { createdAt: 'asc' },
-    take: 30,
+    take: 16,
   });
 
   const systemPrompt = siteSystemPrompt || DEFAULT_SYSTEM_PROMPT;
