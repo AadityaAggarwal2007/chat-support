@@ -31,8 +31,24 @@ router.post('/', async (req, res) => {
     const count = await prisma.siteEmail.count({ where: { siteId: req.params.siteId } });
     if (count >= 3) return res.status(400).json({ error: 'Maximum 3 email accounts per site' });
 
+    // One mailbox belongs to one site. Two sites polling the same address would
+    // both ingest every message, both auto-reply to the customer, and split the
+    // thread across two inboxes.
+    const normalized = email.toLowerCase().trim();
+    const claimed = await prisma.siteEmail.findFirst({
+      where: { email: normalized },
+      include: { site: { select: { id: true, name: true } } },
+    });
+    if (claimed) {
+      return res.status(409).json({
+        error: claimed.site.id === req.params.siteId
+          ? 'This address is already connected to this site'
+          : `This address is already connected to "${claimed.site.name}" — remove it there first`,
+      });
+    }
+
     const account = await prisma.siteEmail.create({
-      data: { siteId: req.params.siteId, email: email.toLowerCase().trim(), appPassword },
+      data: { siteId: req.params.siteId, email: normalized, appPassword },
     });
 
     res.status(201).json({ id: account.id, email: account.email, createdAt: account.createdAt });

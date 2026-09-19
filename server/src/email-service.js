@@ -212,12 +212,73 @@ async function pollEmailAccount(siteEmail, site, io) {
           io.of('/agent').to(`conv:${conversation.id}`).emit('new_message', visitorMsg);
         }
 
-        // AI auto-reply
+        // ── AI auto-reply ──────────────────────────────────────────────
+        // Routine questions (order status, tracking) are answered and sent.
+        // Anything the AI escalates, and anything it could not answer at all,
+        // is held back: the draft stays in the thread for an agent and the
+        // customer hears nothing rather than being told something unverified.
         if (site.aiEnabled && conversation.status === 'ai_handling') {
           try {
             const aiResult = await getAIResponse(conversation.id, site.systemPrompt, site.trackerBusinessId);
+
+            // The same hidden tool context the chat path stores. Without it the
+            // next email in this thread rebuilds the history with no record of
+            // the order already looked up, so the AI asks for the phone number
+            // again and the customer repeats themselves.
+            if (aiResult.toolCallMeta) {
+              const { tool_calls, tool_call_id, tool_result } = aiResult.toolCallMeta;
+              await prisma.message.create({
+                data: {
+                  conversationId: conversation.id,
+                  sender: 'ai',
+                  content: '',
+                  metadata: { tool_calls, hidden: true },
+                },
+              });
+              await prisma.message.create({
+                data: {
+                  conversationId: conversation.id,
+                  sender: 'tool_result',
+                  content: tool_result,
+                  metadata: { tool_call_id, hidden: true },
+                },
+              });
+            }
+
+            // Every model was down, so there is no answer to send. The filler
+            // getAIResponse returns ("could you send that again?") reads as
+            // nonsense in an email the customer wrote once, so it is not sent
+            // and not stored — the thread goes to a human instead.
+            if (aiResult.allFailed) {
+              await prisma.conversation.update({
+                where: { id: conversation.id },
+                data: { status: 'human_needed', lastMessageAt: new Date() },
+              });
+              const flagged = await prisma.conversation.findUnique({ where: { id: conversation.id } });
+              if (io) {
+                io.of('/agent').to(`site:${site.id}`).emit('conversation_updated', flagged);
+                io.of('/agent').to(`conv:${conversation.id}`).emit('conversation_updated', flagged);
+              }
+              console.warn(`[email] No model available — held ${fromAddr} for a human ("${site.name}")`);
+              continue;
+            }
+
+            // escalate_to_human has already moved the conversation to
+            // human_needed; the reply is kept as an unsent draft.
+            const held = Boolean(aiResult.escalated);
+
+            // Stored as not-yet-emailed and flipped once SMTP confirms. A
+            // message that claims it was sent when the send threw would leave
+            // the thread looking answered while the customer got nothing.
             const aiMsg = await prisma.message.create({
-              data: { conversationId: conversation.id, sender: 'ai', content: aiResult.content },
+              data: {
+                conversationId: conversation.id,
+                sender: 'ai',
+                content: aiResult.content,
+                metadata: held
+                  ? { emailed: false, withheld: 'escalated' }
+                  : { emailed: false, withheld: 'sending' },
+              },
             });
 
             await prisma.conversation.update({
@@ -229,22 +290,64 @@ async function pollEmailAccount(siteEmail, site, io) {
               io.of('/agent').to(`conv:${conversation.id}`).emit('new_message', aiMsg);
             }
 
-            // Send via SMTP
-            const html = buildEmailHtml(aiResult.content, site.name);
-            await sendEmailReply({
-              fromEmail: siteEmail.email,
-              appPassword: siteEmail.appPassword,
-              toEmail: fromAddr,
-              subject,
-              htmlBody: html,
-              textBody: aiResult.content,
-              replyToMessageId: messageId,
-              references,
-            });
+            if (held) {
+              // escalate_to_human sets this too, but it is set again here so a
+              // model that reports an escalation the tool never persisted still
+              // leaves a flagged thread rather than a silently dropped refund.
+              await prisma.conversation.update({
+                where: { id: conversation.id },
+                data: { status: 'human_needed' },
+              });
+              // Surface the flag in the inbox straight away — the customer is
+              // waiting on a person, not on us.
+              const flagged = await prisma.conversation.findUnique({ where: { id: conversation.id } });
+              if (io) {
+                io.of('/agent').to(`site:${site.id}`).emit('conversation_updated', flagged);
+                io.of('/agent').to(`conv:${conversation.id}`).emit('conversation_updated', flagged);
+              }
+              console.log(`[email] Escalated ${fromAddr} for site "${site.name}" — reply held, not sent`);
+              continue;
+            }
 
-            console.log(`[email] Auto-replied to ${fromAddr} for site "${site.name}"`);
+            // Send via SMTP
+            try {
+              const html = buildEmailHtml(aiResult.content, site.name);
+              await sendEmailReply({
+                fromEmail: siteEmail.email,
+                appPassword: siteEmail.appPassword,
+                toEmail: fromAddr,
+                subject,
+                htmlBody: html,
+                textBody: aiResult.content,
+                replyToMessageId: messageId,
+                references,
+              });
+
+              await prisma.message.update({
+                where: { id: aiMsg.id },
+                data: { metadata: { emailed: true } },
+              });
+              console.log(`[email] Auto-replied to ${fromAddr} for site "${site.name}"`);
+            } catch (sendErr) {
+              // The answer exists but never left the building, so the thread
+              // must not look answered. Hand it to a human with the draft intact.
+              await prisma.message.update({
+                where: { id: aiMsg.id },
+                data: { metadata: { emailed: false, withheld: 'send_failed' } },
+              });
+              await prisma.conversation.update({
+                where: { id: conversation.id },
+                data: { status: 'human_needed' },
+              });
+              const flagged = await prisma.conversation.findUnique({ where: { id: conversation.id } });
+              if (io) {
+                io.of('/agent').to(`site:${site.id}`).emit('conversation_updated', flagged);
+                io.of('/agent').to(`conv:${conversation.id}`).emit('conversation_updated', flagged);
+              }
+              console.error(`[email] SMTP failed for ${fromAddr} ("${site.name}"):`, sendErr.message);
+            }
           } catch (aiErr) {
-            console.error('[email] AI/SMTP error:', aiErr.message);
+            console.error('[email] AI error:', aiErr.message);
           }
         }
       }

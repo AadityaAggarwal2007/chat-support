@@ -22,6 +22,19 @@ const STATUS_COLORS: Record<string, string> = {
   human_needed: 'bg-red-100 text-red-700',
 };
 
+// An AI reply that was written but never emailed — escalated to a human, or
+// the send itself failed. The customer has not seen it.
+const WITHHELD_LABELS: Record<string, string> = {
+  escalated: 'needs a human',
+  send_failed: 'sending failed',
+  sending: 'still sending',
+};
+
+function withheldReason(msg: Message): string | null {
+  const meta = msg.metadata as { withheld?: string } | undefined;
+  return meta?.withheld ?? null;
+}
+
 function renderWithLinks(text: string) {
   const parts = text.split(/(https?:\/\/[^\s]+)/g);
   return parts.map((part, i) =>
@@ -369,10 +382,17 @@ export default function InboxPage() {
                   {msg.sender === 'visitor' ? 'Visitor' : msg.sender === 'agent' ? 'You (Agent)' : 'AI Support'}
                 </span>
                 <div className={clsx(
-                  msg.sender === 'visitor' ? 'chat-bubble-visitor' : msg.sender === 'agent' ? 'chat-bubble-agent' : 'chat-bubble-ai'
+                  msg.sender === 'visitor' ? 'chat-bubble-visitor' : msg.sender === 'agent' ? 'chat-bubble-agent' : 'chat-bubble-ai',
+                  // A held draft must not read like something the customer received
+                  withheldReason(msg) && 'opacity-60 border border-dashed border-amber-400'
                 )}>
                   {renderWithLinks(msg.content)}
                 </div>
+                {withheldReason(msg) && (
+                  <span className="text-xs text-amber-700 bg-amber-50 border border-amber-200 rounded-md px-1.5 py-0.5 mt-1">
+                    Not sent — {WITHHELD_LABELS[withheldReason(msg)!] ?? 'held for you'}
+                  </span>
+                )}
                 <span className="text-xs text-gray-400 mt-1 px-1">
                   {format(new Date(msg.createdAt), 'HH:mm')}
                 </span>
