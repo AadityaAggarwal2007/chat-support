@@ -1,7 +1,33 @@
 const express = require('express');
+const { ImapFlow } = require('imapflow');
 const prisma = require('../db');
 const { authMiddleware } = require('../middleware/auth');
 const router = express.Router({ mergeParams: true });
+
+// The poller answers everything above last_uid, so an account saved with zero
+// would auto-reply to every email already sitting in the mailbox — years of
+// old threads included. Signing in here records where the mailbox stands now
+// (and proves the app password works), so answering starts with the next
+// email to arrive.
+async function mailboxHighWaterMark(email, appPassword) {
+  const client = new ImapFlow({
+    host: 'imap.gmail.com',
+    port: 993,
+    secure: true,
+    auth: { user: email, pass: appPassword },
+    logger: false,
+  });
+
+  await client.connect();
+  try {
+    const box = await client.mailboxOpen('INBOX', { readOnly: true });
+    if (typeof box?.uidNext === 'number' && box.uidNext > 0) return box.uidNext - 1;
+    const uids = await client.search({ all: true });
+    return Array.isArray(uids) && uids.length ? Math.max(...uids) : 0;
+  } finally {
+    try { await client.logout(); } catch { /* already gone */ }
+  }
+}
 
 router.use(authMiddleware);
 
@@ -47,8 +73,25 @@ router.post('/', async (req, res) => {
       });
     }
 
+    let lastUid;
+    try {
+      lastUid = await mailboxHighWaterMark(normalized, appPassword.replace(/\s+/g, ''));
+    } catch (imapErr) {
+      const text = String(imapErr?.message || '').toLowerCase();
+      return res.status(400).json({
+        error: text.includes('invalid credentials') || text.includes('authenticationfailed')
+          ? 'Gmail rejected that address and app password. Use a 16-character App Password.'
+          : `Could not sign in to that mailbox: ${imapErr.message}`,
+      });
+    }
+
     const account = await prisma.siteEmail.create({
-      data: { siteId: req.params.siteId, email: normalized, appPassword },
+      data: {
+        siteId: req.params.siteId,
+        email: normalized,
+        appPassword: appPassword.replace(/\s+/g, ''),
+        lastUid,
+      },
     });
 
     res.status(201).json({ id: account.id, email: account.email, createdAt: account.createdAt });
